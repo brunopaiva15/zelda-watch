@@ -2,7 +2,7 @@
 
 Alerte dès que la **manette Pro Switch 2 – The Legend of Zelda (40th Anniversary)** est de retour en stock dans une boutique suisse.
 
-**Boutiques surveillées :** Galaxus, Digitec, Interdiscount, MediaMarkt, Brack, Fnac, Manor, Fust, Conrad, Steg, World of Games, et Toppreise (comparateur, attrape les boutiques qui ne sont pas dans la liste). Ricardo est prévu mais désactivé (revendeurs).
+**Boutiques surveillées :** Galaxus, Digitec, Interdiscount, MediaMarkt, Brack, Fnac, Nintendo Store (CH), Mix-Image, Manor, World of Games, et Toppreise (comparateur, attrape les boutiques qui ne sont pas dans la liste). Ricardo est prévu mais désactivé (revendeurs).
 
 Pour chaque boutique, le script ouvre la page de recherche dans un vrai Chromium headless, repère la fiche de la manette, puis lit sa disponibilité (données schema.org en priorité, sinon le texte de la page en FR/DE/EN). Il n'alerte qu'au **changement** (rupture → dispo), avec un rappel toutes les 30 min tant que c'est en stock.
 
@@ -110,5 +110,5 @@ Les fiches trouvées sont mémorisées dans `zelda_state.json` : même si la rec
 ## Bon à savoir
 
 - Le script ne fait que lire les pages, à un rythme humain (≈ 5 min, pauses aléatoires). Il n'achète rien.
-- Les URL de recherche de certaines boutiques (Manor, Fust, Steg, WoG, Toppreise) n'ont pas pu être vérifiées en direct : `--test` te dit tout de suite lesquelles répondent.
+- Les URL de recherche de Brack et Manor n'ont pas pu être vérifiées en direct : `--test` te dit tout de suite lesquelles répondent.
 - Supprime `zelda_state.json` pour repartir de zéro.

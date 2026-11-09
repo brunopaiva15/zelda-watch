@@ -80,11 +80,10 @@ SITES = [
     dict(name="Mix-Image",
          urls=["https://mix-image.ch/produit/manette-pro-nintendo-switch-2-edition-40e-anniversaire-the-legend-of-zelda/"]),
     dict(name="Manor",         search=f"https://www.manor.ch/fr/search?text={Q}"),
-    dict(name="Fust",          search=f"https://www.fust.ch/fr/search.html?q={Q}"),
-    dict(name="Conrad",        search=f"https://www.conrad.ch/fr/search.html?search={Q}"),
-    dict(name="Steg",          search=f"https://www.steg-electronics.ch/fr/search?q={Q}"),
-    dict(name="World of Games", search=f"https://www.wog.ch/index.cfm/search/?q={Q}"),
-    dict(name="Toppreise",     search=f"https://www.toppreise.ch/chercher?q={Q}", aggregator=True),
+    dict(name="World of Games",
+         urls=["https://www.wog.ch/fr/index.cfm/details/product/256985%2DNintendo%2DSwitch%2D2%2DPro%2DController%2DThe%2DLegend%2Dof%2DZelda%2DOcarina%2Dof%2DTime"]),
+    dict(name="Toppreise", aggregator=True,
+         urls=["https://www.toppreise.ch/comparison-prix/Manettes-Nintendo-Switch-2/NINTENDO-Manette-Switch-2-Pro-edition-The-Legend-of-p879583"]),
     # Revente entre particuliers (souvent au-dessus du prix) — désactivé par défaut
     dict(name="Ricardo",       search=f"https://www.ricardo.ch/fr/s/{Q}", enabled=False),
 ]
