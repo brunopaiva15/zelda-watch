@@ -4,3 +4,4 @@ zelda_state.tmp
 __pycache__/
 .venv/
 *.log
+zelda_cookies_*.json

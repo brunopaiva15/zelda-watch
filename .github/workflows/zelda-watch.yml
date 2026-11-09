@@ -20,15 +20,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Installer Playwright + Chromium + Firefox
+      - name: Installer Playwright + navigateurs
         run: |
           pip install playwright
-          python -m playwright install --with-deps chromium firefox
+          python -m playwright install --with-deps chromium firefox webkit
 
-      - name: Restaurer l'état (évite les alertes en double)
+      - name: Restaurer l'état et les cookies (évite les alertes en double)
         uses: actions/cache/restore@v4
         with:
-          path: zelda_state.json
+          path: |
+            zelda_state.json
+            zelda_cookies_*.json
           key: zelda-state-${{ github.run_id }}
           restore-keys: zelda-state-
 
@@ -38,10 +40,14 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          # Sites qui refusent les IP de GitHub : à surveiller depuis ton Mac (voir README)
+          # SKIP_SITES: "Interdiscount,Fnac"
 
-      - name: Sauver l'état
+      - name: Sauver l'état et les cookies
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: zelda_state.json
+          path: |
+            zelda_state.json
+            zelda_cookies_*.json
           key: zelda-state-${{ github.run_id }}

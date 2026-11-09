@@ -4,16 +4,35 @@ Alerte dès que la **manette Pro Switch 2 – The Legend of Zelda (40th Annivers
 
 **Boutiques surveillées :** Galaxus, Digitec, Interdiscount, MediaMarkt, Brack, Fnac, Nintendo Store (CH), Mix-Image, Manor, World of Games, et Toppreise (comparateur, attrape les boutiques qui ne sont pas dans la liste). Ricardo est prévu mais désactivé (revendeurs).
 
-Pour chaque boutique, le script ouvre la page de recherche dans un vrai Chromium headless, repère la fiche de la manette, puis lit sa disponibilité (données schema.org en priorité, sinon le texte de la page en FR/DE/EN). Si Chromium est refusé par un site, il réessaie avec Firefox. Chaque statut indique la raison (ex. `schema.org InStock`, `texte « en stock »`) pour comprendre une alerte. Il n'alerte qu'au **changement** (rupture → dispo), avec un rappel toutes les 30 min tant que c'est en stock.
+## Comment il lit le stock
+
+Pour chaque fiche, le script ouvre la page dans un vrai navigateur et croise trois sources, de la plus fiable à la moins fiable :
+
+1. **Données structurées** que les shops publient pour Google : schema.org (JSON-LD), microdata, balises meta produit. Les offres annexes à moins de `MIN_PRICE` (garantie, livraison à 4.95…) sont ignorées.
+2. **Le bouton panier** : actif ou désactivé.
+3. **Le texte de la zone d'achat** (prix + bouton + dispo) en FR/DE/EN/IT, puis du reste de la fiche. Les « en stock » des produits similaires ou du pied de page ne comptent pas.
+
+Chaque statut affiche ce qui l'a décidé, par exemple `schema.org OutOfStock · CHF 109.95` ou `zone d'achat « en stock »`. Avant toute alerte, la fiche est **relue une 2e fois** 15–25 s plus tard : une alerte n'est envoyée que si les deux lectures concordent. Il n'alerte qu'au **changement** (rupture → dispo), avec un rappel toutes les 30 min tant que c'est en stock.
 
 | Statut | Signification | Alerte |
 |---|---|---|
 | ✅ EN STOCK | commandable | oui |
 | 🟡 PRÉCOMMANDE | réservable | oui |
-| ⚠️ À VÉRIFIER | signaux contradictoires (ex. livraison KO mais retrait en magasin OK) | oui |
+| ⚠️ À VÉRIFIER | sources contradictoires (ex. schema.org dit dispo, la page dit rupture) | oui |
 | 💸 trop cher | dispo mais au-dessus de `MAX_PRICE` (130 CHF par défaut) | non |
-| ❌ rupture / · pas listée | rien à faire | non |
-| 🚫 bloqué / 💥 erreur | le site refuse le robot | alerte « site non surveillé » après ~1 h |
+| ❌ rupture / ❔ inconnu / · pas listée | rien à faire | non |
+| 🚫 bloqué / 💥 erreur | le site refuse le robot (le log dit lequel : DataDome, Cloudflare, Akamai…) | après 6 échecs |
+| ⏸ en pause | site bloqué plusieurs fois de suite, retenté moins souvent | non |
+
+## Quand un site bloque (403)
+
+- Le script réessaie avec **Chromium, puis Firefox, puis WebKit**, et retient pour chaque site le navigateur qui a marché.
+- Il laisse quelques secondes au site pour terminer sa vérification automatique, puis relit la page.
+- Il **garde les cookies** entre deux passages, comme un navigateur normal.
+- Si un site bloque 3 fois de suite, il ne le retente plus qu'1 passage sur 4, pour ne pas se faire bannir plus fort.
+- Après 6 échecs, tu reçois « ⚠️ Site non surveillé ».
+
+Le script ne contourne pas les captchas. Un site qui refuse toutes les IP de datacenter (GitHub, serveurs cloud) ne passera jamais depuis là : la solution est de le surveiller depuis une connexion de particulier, voir « Répartir entre GitHub et ton Mac ».
 
 ---
 
@@ -23,7 +42,7 @@ Pour chaque boutique, le script ouvre la page de recherche dans un vrai Chromium
 cd zelda-watch
 python3 -m venv .venv && source .venv/bin/activate     # Windows : .venv\Scripts\activate
 pip install playwright
-python -m playwright install chromium firefox
+python -m playwright install chromium firefox webkit
 cp .env.example .env                                    # puis remplis-le
 ```
 
@@ -71,6 +90,15 @@ nohup python zelda_watch.py >> zelda.log 2>&1 &
 3. Onglet Actions → « Run workflow » pour tester.
 
 Limites : GitHub déclenche avec 5–20 min de retard, et les IP de datacenter se font plus souvent bloquer par MediaMarkt/Interdiscount. Bien pour dépanner, moins bien qu'un Mac ou un Pi.
+
+### Répartir entre GitHub et ton Mac
+
+Interdiscount et Fnac refusent les IP de GitHub, mais passent depuis une connexion de particulier.
+
+1. Dans `.github/workflows/zelda-watch.yml`, décommente `SKIP_SITES: "Interdiscount,Fnac"`.
+2. Sur ton Mac, dans `.env` : `ONLY_SITES=Interdiscount,Fnac`, puis lance le script en continu (launchd ci-dessous).
+
+GitHub surveille le reste, ton Mac ne s'occupe que de ces deux-là.
 
 ### Démarrage auto sur Mac (launchd)
 
