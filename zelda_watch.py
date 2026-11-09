@@ -53,6 +53,7 @@ STATE_FILE = Path(os.environ.get("STATE_FILE", HERE / "zelda_state.json"))
 INTERVAL_MIN = float(os.environ.get("INTERVAL_MIN", "5"))     # délai entre deux passages
 REMIND_MIN = float(os.environ.get("REMIND_MIN", "30"))        # rappel si toujours en stock (0 = off)
 MAX_PRICE = float(os.environ.get("MAX_PRICE", "130"))         # ignore les offres plus chères (revendeurs)
+MIN_PRICE = float(os.environ.get("MIN_PRICE", "50"))          # offres moins chères = services/accessoires, ignorées
 FAIL_ALERT_PASSES = int(os.environ.get("FAIL_ALERT_PASSES", "12"))  # alerte si un site est KO trop longtemps
 ENGINES = [e.strip() for e in os.environ.get("ENGINES", "chromium,firefox").split(",") if e.strip()]
 MAX_LINKS_PER_SEARCH = 4
@@ -109,7 +110,7 @@ def is_target(text: str) -> bool:
     """Vrai si le texte (titre + URL) désigne la manette Pro Switch 2 Zelda."""
     t = norm(text)
     return ("zelda" in t
-            and ("controller" in t or "manette" in t)
+            and re.search(r"controller|manette|controleur|kontroller", t) is not None
             and re.search(r"switch ?2", t) is not None
             and not any(x in t for x in EXCLUDE))
 
@@ -205,21 +206,29 @@ def classify_jsonld(blocks: list[str]) -> tuple[str | None, str, float | None]:
         return None, "", None
     matching = [p for p in products if is_target(str(p.get("name", "")))]
     pool = matching or (products if len(products) == 1 else [])
-    found, raw_av, prices = set(), "", []
+    offers = []   # (statut, valeur brute, prix)
     for p in pool:
         for d in _walk(p.get("offers", [])):
             av = str(d.get("availability", "")).rsplit("/", 1)[-1]
-            if av.lower() in LD_MAP:
-                found.add(LD_MAP[av.lower()])
-                raw_av = raw_av or av
+            price = None
             for k in ("price", "lowPrice"):
-                pr = parse_price(d.get(k)) if d.get(k) not in (None, "") else None
-                if pr:
-                    prices.append(pr)
+                if d.get(k) not in (None, ""):
+                    price = parse_price(d.get(k))
+                    break
+            if av.lower() in LD_MAP:
+                offers.append((LD_MAP[av.lower()], av, price))
+            elif price:
+                offers.append((None, "", price))
+    # Une page peut lister des offres annexes (garantie, livraison, accessoire à 4.95…) :
+    # on ne garde que celles dont le prix ressemble à celui d'une manette.
+    plausible = [o for o in offers if o[2] is None or o[2] >= MIN_PRICE]
+    offers = plausible or offers
+    prices = [o[2] for o in offers if o[2]]
     price = min(prices) if prices else None
-    for s in ("in", "preorder", "out"):
-        if s in found:
-            return s, raw_av, price
+    for s_ in ("in", "preorder", "out"):
+        for st, raw, pr in offers:
+            if st == s_:
+                return st, raw, (pr or price)
     return None, "", price
 
 
