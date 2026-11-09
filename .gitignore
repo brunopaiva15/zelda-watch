@@ -1,0 +1,6 @@
+.env
+zelda_state.json
+zelda_state.tmp
+__pycache__/
+.venv/
+*.log

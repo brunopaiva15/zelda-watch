@@ -1,0 +1,47 @@
+name: zelda-watch
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # GitHub lance « au mieux » : souvent 5–20 min de retard
+  workflow_dispatch:
+
+concurrency:
+  group: zelda-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer Playwright + Chromium
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Restaurer l'état (évite les alertes en double)
+        uses: actions/cache/restore@v4
+        with:
+          path: zelda_state.json
+          key: zelda-state-${{ github.run_id }}
+          restore-keys: zelda-state-
+
+      - name: Vérifier les stocks
+        run: python zelda_watch.py --once
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+
+      - name: Sauver l'état
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: zelda_state.json
+          key: zelda-state-${{ github.run_id }}
