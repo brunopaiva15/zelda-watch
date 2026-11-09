@@ -5,12 +5,13 @@ Surveille le stock de la manette « Nintendo Switch 2 Pro Controller – The Leg
 (40th Anniversary) » sur les boutiques suisses et t'alerte dès qu'elle est commandable.
 
 Alertes : Telegram, ntfy (push sur le téléphone, gratuit), notification macOS.
-Navigateur : Chromium headless via Playwright (les shops suisses chargent tout en JS).
+Navigateur : Chromium headless via Playwright, avec repli automatique sur Firefox
+quand un site refuse Chromium.
 
 Usage :
     python zelda_watch.py            # tourne en boucle (toutes les INTERVAL_MIN minutes)
     python zelda_watch.py --once     # un seul passage (cron, GitHub Actions…)
-    python zelda_watch.py --test     # un passage détaillé + notification de test
+    python zelda_watch.py --test     # un passage + notification de test
 """
 from __future__ import annotations
 
@@ -43,7 +44,7 @@ def load_dotenv(path: Path = HERE / ".env") -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, v = line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+        os.environ.setdefault(k.strip(), v.split("#", 1)[0].strip().strip('"').strip("'"))
 
 
 load_dotenv()
@@ -51,14 +52,16 @@ load_dotenv()
 STATE_FILE = Path(os.environ.get("STATE_FILE", HERE / "zelda_state.json"))
 INTERVAL_MIN = float(os.environ.get("INTERVAL_MIN", "5"))     # délai entre deux passages
 REMIND_MIN = float(os.environ.get("REMIND_MIN", "30"))        # rappel si toujours en stock (0 = off)
+MAX_PRICE = float(os.environ.get("MAX_PRICE", "130"))         # ignore les offres plus chères (revendeurs)
 FAIL_ALERT_PASSES = int(os.environ.get("FAIL_ALERT_PASSES", "12"))  # alerte si un site est KO trop longtemps
+ENGINES = [e.strip() for e in os.environ.get("ENGINES", "chromium,firefox").split(",") if e.strip()]
 MAX_LINKS_PER_SEARCH = 4
 
 Q = urllib.parse.quote("zelda pro controller")
 
 # Boutiques suisses. `urls` = fiches produit connues, `search` = page de recherche
 # (le script y repère tout seul les fiches correspondantes et les mémorise).
-# `aggregator=True` : comparateur, une seule offre en stock suffit pour alerter.
+# `aggregator=True` : comparateur de prix, alerte si une offre passe sous MAX_PRICE.
 SITES = [
     dict(name="Galaxus",
          urls=["https://www.galaxus.ch/fr/s1/product/nintendo-manette-switch-2-pro-edition-the-legend-of-zelda-switch-2-manette-76622992"],
@@ -130,28 +133,37 @@ BLOCK = ["access denied", "just a moment", "attention required", "captcha", "are
 NEG_RE = re.compile("|".join(NEG))
 ALERT = {"in", "preorder", "maybe"}
 LABEL = {"in": "✅ EN STOCK", "preorder": "🟡 PRÉCOMMANDE", "maybe": "⚠️ À VÉRIFIER",
-         "out": "❌ rupture", "unknown": "❔ inconnu", "absent": "· pas listée",
-         "blocked": "🚫 bloqué", "error": "💥 erreur"}
+         "out": "❌ rupture", "pricey": "💸 trop cher", "unknown": "❔ inconnu",
+         "absent": "· pas listée", "blocked": "🚫 bloqué", "error": "💥 erreur"}
 
 
-def classify_text(text: str, aggregator: bool = False) -> str:
+def _first(patterns: list[str], text: str) -> str | None:
+    for p in patterns:
+        m = re.search(p, text)
+        if m:
+            return m.group(0)
+    return None
+
+
+def classify_text(text: str) -> tuple[str, str]:
+    """→ (statut, raison). La raison cite le mot qui a décidé, pour déboguer."""
     t = norm(text)
-    neg = NEG_RE.search(t) is not None
+    neg = _first(NEG, t)
     cleaned = NEG_RE.sub(" ", t)   # « pas en stock » ne doit pas compter comme « en stock »
-    strong = any(re.search(p, cleaned) for p in STRONG)
-    pre = any(re.search(p, cleaned) for p in PREORDER)
-    cart = any(re.search(p, cleaned) for p in CART)
-    if aggregator:
-        return "maybe" if strong else ("out" if neg else "unknown")
+    strong = _first(STRONG, cleaned)
+    pre = _first(PREORDER, cleaned)
+    cart = _first(CART, cleaned)
+    if strong and neg:
+        return "maybe", f"texte « {strong} » mais aussi « {neg} »"
     if strong:
-        return "maybe" if neg else "in"
+        return "in", f"texte « {strong} »"
     if neg:
-        return "out"
+        return "out", f"texte « {neg} »"
     if pre:
-        return "preorder"
+        return "preorder", f"texte « {pre} »"
     if cart:
-        return "maybe"
-    return "unknown"
+        return "maybe", f"bouton « {cart} » sans info de stock"
+    return "unknown", "aucun indice de stock"
 
 
 LD_MAP = {"instock": "in", "limitedavailability": "in", "onlineonly": "in", "instoreonly": "in",
@@ -169,8 +181,15 @@ def _walk(obj):
             yield from _walk(v)
 
 
-def classify_jsonld(blocks: list[str]) -> str | None:
-    """Lit schema.org Product → offers.availability (signal le plus fiable quand il existe)."""
+def parse_price(v) -> float | None:
+    try:
+        return float(str(v).replace("'", "").replace("’", "").replace(",", ".").strip())
+    except Exception:
+        return None
+
+
+def classify_jsonld(blocks: list[str]) -> tuple[str | None, str, float | None]:
+    """schema.org Product → (statut, valeur brute, prix). Signal le plus fiable quand il existe."""
     products = []
     for raw in blocks:
         try:
@@ -183,32 +202,57 @@ def classify_jsonld(blocks: list[str]) -> str | None:
             if "Product" in typs:
                 products.append(d)
     if not products:
-        return None
+        return None, "", None
     matching = [p for p in products if is_target(str(p.get("name", "")))]
     pool = matching or (products if len(products) == 1 else [])
-    found = set()
+    found, raw_av, prices = set(), "", []
     for p in pool:
         for d in _walk(p.get("offers", [])):
-            av = str(d.get("availability", "")).rsplit("/", 1)[-1].lower()
-            if av in LD_MAP:
-                found.add(LD_MAP[av])
+            av = str(d.get("availability", "")).rsplit("/", 1)[-1]
+            if av.lower() in LD_MAP:
+                found.add(LD_MAP[av.lower()])
+                raw_av = raw_av or av
+            for k in ("price", "lowPrice"):
+                pr = parse_price(d.get(k)) if d.get(k) not in (None, "") else None
+                if pr:
+                    prices.append(pr)
+    price = min(prices) if prices else None
     for s in ("in", "preorder", "out"):
         if s in found:
-            return s
-    return None
+            return s, raw_av, price
+    return None, "", price
 
 
-def combine(ld: str | None, txt: str) -> str:
+def combine(ld: str | None, ld_raw: str, txt: str, why: str) -> tuple[str, str]:
     if ld is None:
-        return txt
+        return txt, why
+    tag = f"schema.org {ld_raw}"
     if ld == "out":
-        return "maybe" if txt == "in" else "out"
+        return ("maybe", f"{tag} mais {why}") if txt == "in" else ("out", tag)
     if txt == "out":
-        return "maybe"
-    return "in" if txt == "in" else ld
+        return "maybe", f"{tag} mais {why}"
+    if txt == "in":
+        return "in", f"{tag} + {why}"
+    return ld, tag
 
 
-# ─────────────────────────────── Navigateur ───────────────────────────────
+def toppreise_status(raw: str) -> tuple[str, str]:
+    """Toppreise affiche la dispo en icônes : on se fie au prix le plus bas affiché."""
+    m = re.search(r"(?:à partir de|a partir de|ab|from)\s*CHF\s*([\d'’]+(?:[.,]\d{1,2})?)", raw, re.I)
+    if not m:
+        t = norm(raw)
+        if re.search(r"aucune offre|keine angebote|no offers", t):
+            return "out", "aucune offre"
+        return "unknown", "prix introuvable"
+    price = parse_price(m.group(1))
+    if price is None:
+        return "unknown", "prix illisible"
+    if price <= MAX_PRICE:
+        return "in", f"offre dès CHF {price:.2f} (≤ {MAX_PRICE:.0f})"
+    return "pricey", f"seule offre dès CHF {price:.2f} (> {MAX_PRICE:.0f})"
+
+
+# ─────────────────────────────── Navigateurs ───────────────────────────────
 
 JS_REGION = """() => {
   const h = document.querySelector('h1');
@@ -228,25 +272,66 @@ JS_LINKS = """() => Array.from(document.querySelectorAll('a[href]')).map(a => [
 ])"""
 
 
-def make_browser(p):
-    headless = os.environ.get("HEADLESS", "1") != "0"
-    browser = p.chromium.launch(headless=headless,
-                                args=["--disable-blink-features=AutomationControlled"])
-    major = browser.version.split(".")[0]
-    ua = (f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-          f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
-    ctx = browser.new_context(locale="fr-CH", timezone_id="Europe/Zurich", user_agent=ua,
-                              viewport={"width": 1366, "height": 900},
-                              extra_http_headers={"Accept-Language": "fr-CH,fr;q=0.9,de-CH;q=0.8,en;q=0.7"})
-    ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-    ctx.route("**/*", lambda r: r.abort() if r.request.resource_type in ("image", "media", "font")
-              else r.continue_())
-    return browser, ctx
+class Engines:
+    """Lance Chromium puis Firefox à la demande, un contexte par moteur."""
+
+    def __init__(self, p):
+        self.p, self.ctx, self.browsers, self.dead = p, {}, [], set()
+
+    def get(self, name: str):
+        if name in self.ctx or name in self.dead:
+            return self.ctx.get(name)
+        headless = os.environ.get("HEADLESS", "1") != "0"
+        common = dict(locale="fr-CH", timezone_id="Europe/Zurich",
+                      viewport={"width": 1366, "height": 900},
+                      extra_http_headers={"Accept-Language": "fr-CH,fr;q=0.9,de-CH;q=0.8,en;q=0.7"})
+        try:
+            if name == "chromium":
+                args = ["--disable-blink-features=AutomationControlled"]
+                try:   # « vrai » Chromium en headless (moins détectable que headless-shell)
+                    browser = self.p.chromium.launch(channel="chromium", headless=headless, args=args)
+                except Exception:
+                    browser = self.p.chromium.launch(headless=headless, args=args)
+                major = browser.version.split(".")[0]
+                ua = (f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                      f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36")
+                ctx = browser.new_context(user_agent=ua, **common)
+                ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+            elif name == "firefox":
+                browser = self.p.firefox.launch(headless=headless)
+                ctx = browser.new_context(**common)
+            else:
+                raise ValueError(name)
+        except Exception as e:
+            log(f"Moteur {name} indisponible ({short(e)})")
+            self.dead.add(name)
+            return None
+        ctx.route("**/*", lambda r: r.abort() if r.request.resource_type in ("image", "media", "font")
+                  else r.continue_())
+        self.browsers.append(browser)
+        self.ctx[name] = ctx
+        return ctx
+
+    def close(self):
+        for b in self.browsers:
+            try:
+                b.close()
+            except Exception:
+                pass
+
+
+def short(e: Exception) -> str:
+    msg = str(e).strip().splitlines()[0] if str(e).strip() else ""
+    return f"{type(e).__name__}: {msg[:110]}"
 
 
 def open_page(ctx, url: str):
     page = ctx.new_page()
-    resp = page.goto(url, wait_until="domcontentloaded", timeout=45000)
+    try:
+        resp = page.goto(url, wait_until="domcontentloaded", timeout=45000)
+    except Exception:
+        page.close()
+        raise
     try:
         page.wait_for_load_state("networkidle", timeout=12000)
     except Exception:
@@ -269,15 +354,15 @@ def clean_url(u: str) -> str:
     return urllib.parse.urlunsplit((p.scheme, p.netloc, p.path, urllib.parse.urlencode(q), ""))
 
 
-def discover(ctx, search_url: str) -> tuple[list[str], str]:
-    """Ouvre la page de recherche et renvoie les liens vers la manette."""
+def discover(ctx, search_url: str) -> tuple[str, str, list[str]]:
+    """Page de recherche → (statut, détail, liens vers la manette)."""
     page, code = open_page(ctx, search_url)
     try:
         info = page.evaluate(JS_REGION)
         if looks_blocked(code, info["title"], info["body"]):
-            return [], "blocked"
+            return "blocked", f"HTTP {code}", []
         if code >= 400:
-            return [], f"http {code}"
+            return "error", f"HTTP {code}", []
         host = urllib.parse.urlsplit(search_url).netloc.replace("www.", "")
         out = []
         for href, text in page.evaluate(JS_LINKS):
@@ -290,28 +375,52 @@ def discover(ctx, search_url: str) -> tuple[list[str], str]:
                 out.append(u)
             if len(out) >= MAX_LINKS_PER_SEARCH:
                 break
-        return out, "ok"
+        return "ok", f"{len(out)} fiche(s)", out
     finally:
         page.close()
 
 
 def check_product(ctx, url: str, aggregator: bool) -> tuple[str, str]:
+    """Fiche produit → (statut, détail)."""
     page, code = open_page(ctx, url)
     try:
         info = page.evaluate(JS_REGION)
         if looks_blocked(code, info["title"], info["body"]):
             return "blocked", f"HTTP {code}"
-        if code == 404 or code == 410:
+        if code in (404, 410):
             return "absent", "fiche supprimée"
         if code >= 400:
             return "error", f"HTTP {code}"
-        name = (info["h1"] or info["title"]).strip().replace("\n", " ")[:90]
         if aggregator:
-            return classify_text(info["body"], aggregator=True), name
-        ld = classify_jsonld(page.locator('script[type="application/ld+json"]').all_text_contents())
-        return combine(ld, classify_text(info["region"])), name
+            return toppreise_status(info["title"] + "\n" + info["h1"] + "\n" + info["body"][:5000])
+        ld, ld_raw, price = classify_jsonld(
+            page.locator('script[type="application/ld+json"]').all_text_contents())
+        status, why = combine(ld, ld_raw, *classify_text(info["region"]))
+        if price:
+            why += f" · CHF {price:.2f}"
+            if status in ALERT and price > MAX_PRICE:
+                return "pricey", why
+        return status, why
     finally:
         page.close()
+
+
+def with_fallback(engines: Engines, fn, url: str, *args):
+    """Essaie chaque moteur ; passe au suivant si le site plante ou bloque."""
+    last = None
+    for name in ENGINES:
+        ctx = engines.get(name)
+        if ctx is None:
+            continue
+        try:
+            res = fn(ctx, url, *args)
+        except Exception as e:
+            last = ("error", f"[{name}] {short(e)}") + (([],) if fn is discover else ())
+            continue
+        if res[0] not in ("blocked", "error"):
+            return res[:1] + (f"[{name}] {res[1]}",) + res[2:]
+        last = res[:1] + (f"[{name}] {res[1]}",) + res[2:]
+    return last or (("error", "aucun moteur", []) if fn is discover else ("error", "aucun moteur"))
 
 
 # ─────────────────────────────── Notifications ───────────────────────────────
@@ -364,6 +473,11 @@ def load_state() -> dict:
     for k in ("items", "discovered", "fails"):
         s.setdefault(k, {})
     s.setdefault("fail_alerted", [])
+    # Oublie les fiches découvertes par une recherche qui n'existe plus dans la config
+    with_search = {x["name"] for x in SITES if x.get("search")}
+    for name in list(s["discovered"]):
+        if name not in with_search:
+            del s["discovered"][name]
     return s
 
 
@@ -373,12 +487,12 @@ def save_state(s: dict) -> None:
     tmp.replace(STATE_FILE)
 
 
-def run_pass(state: dict, verbose: bool = False) -> list[tuple]:
+def run_pass(state: dict) -> list[tuple]:
     from playwright.sync_api import sync_playwright
 
     rows = []
     with sync_playwright() as p:
-        browser, ctx = make_browser(p)
+        engines = Engines(p)
         try:
             for site in SITES:
                 if not site.get("enabled", True):
@@ -387,29 +501,23 @@ def run_pass(state: dict, verbose: bool = False) -> list[tuple]:
                 site_ok = False
 
                 if site.get("search"):
-                    try:
-                        found, st = discover(ctx, site["search"])
-                        site_ok = st == "ok"
-                        known = state["discovered"].setdefault(name, [])
-                        for u in found:
-                            if u not in known:
-                                known.append(u)
-                                log(f"{name} : nouvelle fiche repérée → {u}")
-                        if verbose:
-                            log(f"{name} : recherche {st}, {len(found)} fiche(s)")
-                    except Exception as e:
-                        log(f"{name} : recherche en erreur ({type(e).__name__}: {str(e)[:120]})")
+                    st, detail, found = with_fallback(engines, discover, site["search"])
+                    site_ok = st == "ok"
+                    if st != "ok":
+                        log(f"{name} : recherche {LABEL.get(st, st)} {detail}")
+                    known = state["discovered"].setdefault(name, [])
+                    for u in found:
+                        if u not in known and u not in site.get("urls", []):
+                            known.append(u)
+                            log(f"{name} : nouvelle fiche repérée → {u}")
                     time.sleep(random.uniform(1.5, 4))
 
                 urls = list(dict.fromkeys(site.get("urls", []) + state["discovered"].get(name, [])))
                 if not urls:
-                    rows.append((name, "absent", "aucune fiche trouvée", site.get("search")))
+                    rows.append((name, "absent", "aucune fiche trouvée", ""))
 
                 for url in urls:
-                    try:
-                        status, info = check_product(ctx, url, agg)
-                    except Exception as e:
-                        status, info = "error", f"{type(e).__name__}: {str(e)[:100]}"
+                    status, info = with_fallback(engines, check_product, url, agg)
                     if status not in ("error", "blocked"):
                         site_ok = True
                     rows.append((name, status, info, url))
@@ -418,7 +526,7 @@ def run_pass(state: dict, verbose: bool = False) -> list[tuple]:
 
                 handle_health(state, name, site_ok)
         finally:
-            browser.close()
+            engines.close()
     save_state(state)
     return rows
 
@@ -457,29 +565,26 @@ def handle_health(state: dict, site: str, ok: bool) -> None:
 
 
 def print_table(rows: list[tuple]) -> None:
-    print()
+    print(flush=True)
     for site, status, info, url in rows:
-        print(f"  {site:<15} {LABEL.get(status, status):<16} {info[:60]}")
+        print(f"  {site:<15} {LABEL.get(status, status):<16} {info[:110]}")
         if url:
             print(f"  {'':<15} {url}")
-    print()
+    print(flush=True)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Alerte stock manette Pro Switch 2 Zelda (Suisse)")
     ap.add_argument("--once", action="store_true", help="un seul passage puis quitte")
-    ap.add_argument("--test", action="store_true", help="passage détaillé + notification de test")
+    ap.add_argument("--test", action="store_true", help="passage + notification de test")
     ap.add_argument("--interval", type=float, default=INTERVAL_MIN, help="minutes entre deux passages")
     args = ap.parse_args()
 
     state = load_state()
     if args.test:
         notify("🧪 Test zelda_watch", "Si tu lis ceci, les notifications fonctionnent.")
-        print_table(run_pass(state, verbose=True))
-        return
-    if args.once:
-        rows = run_pass(state)
-        log("Passage terminé : " + ", ".join(f"{r[0]}={r[1]}" for r in rows))
+    if args.test or args.once:
+        print_table(run_pass(state))
         return
 
     log(f"Surveillance lancée — {sum(s.get('enabled', True) for s in SITES)} sites, "
@@ -494,7 +599,7 @@ def main() -> None:
         except KeyboardInterrupt:
             raise
         except Exception as e:
-            log(f"Passage en erreur : {type(e).__name__}: {e}")
+            log(f"Passage en erreur : {short(e)}")
         time.sleep(args.interval * 60 * random.uniform(0.8, 1.2))
 
 

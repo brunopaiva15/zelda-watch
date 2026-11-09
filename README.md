@@ -4,13 +4,14 @@ Alerte dès que la **manette Pro Switch 2 – The Legend of Zelda (40th Annivers
 
 **Boutiques surveillées :** Galaxus, Digitec, Interdiscount, MediaMarkt, Brack, Fnac, Nintendo Store (CH), Mix-Image, Manor, World of Games, et Toppreise (comparateur, attrape les boutiques qui ne sont pas dans la liste). Ricardo est prévu mais désactivé (revendeurs).
 
-Pour chaque boutique, le script ouvre la page de recherche dans un vrai Chromium headless, repère la fiche de la manette, puis lit sa disponibilité (données schema.org en priorité, sinon le texte de la page en FR/DE/EN). Il n'alerte qu'au **changement** (rupture → dispo), avec un rappel toutes les 30 min tant que c'est en stock.
+Pour chaque boutique, le script ouvre la page de recherche dans un vrai Chromium headless, repère la fiche de la manette, puis lit sa disponibilité (données schema.org en priorité, sinon le texte de la page en FR/DE/EN). Si Chromium est refusé par un site, il réessaie avec Firefox. Chaque statut indique la raison (ex. `schema.org InStock`, `texte « en stock »`) pour comprendre une alerte. Il n'alerte qu'au **changement** (rupture → dispo), avec un rappel toutes les 30 min tant que c'est en stock.
 
 | Statut | Signification | Alerte |
 |---|---|---|
 | ✅ EN STOCK | commandable | oui |
 | 🟡 PRÉCOMMANDE | réservable | oui |
 | ⚠️ À VÉRIFIER | signaux contradictoires (ex. livraison KO mais retrait en magasin OK) | oui |
+| 💸 trop cher | dispo mais au-dessus de `MAX_PRICE` (130 CHF par défaut) | non |
 | ❌ rupture / · pas listée | rien à faire | non |
 | 🚫 bloqué / 💥 erreur | le site refuse le robot | alerte « site non surveillé » après ~1 h |
 
@@ -22,7 +23,7 @@ Pour chaque boutique, le script ouvre la page de recherche dans un vrai Chromium
 cd zelda-watch
 python3 -m venv .venv && source .venv/bin/activate     # Windows : .venv\Scripts\activate
 pip install playwright
-python -m playwright install chromium
+python -m playwright install chromium firefox
 cp .env.example .env                                    # puis remplis-le
 ```
 

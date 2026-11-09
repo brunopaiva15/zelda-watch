@@ -20,10 +20,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Installer Playwright + Chromium
+      - name: Installer Playwright + Chromium + Firefox
         run: |
           pip install playwright
-          python -m playwright install --with-deps chromium
+          python -m playwright install --with-deps chromium firefox
 
       - name: Restaurer l'état (évite les alertes en double)
         uses: actions/cache/restore@v4
