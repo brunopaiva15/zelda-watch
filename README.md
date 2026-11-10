@@ -103,6 +103,23 @@ Interdiscount et Fnac sont protégés par DataDome, qui refuse les IP de serveur
 
 Arrêter : `./setup_mac.sh stop`. Log : `tail -f zelda.log`.
 
+### Sur un PC Windows
+
+Même principe que le Mac, avec une tâche planifiée Windows.
+
+1. Récupère le repo : `git clone https://github.com/brunopaiva15/zelda-watch.git`, ou sur GitHub **Code → Download ZIP** puis décompresse.
+2. Dans le dossier, clic droit sur `setup_windows.ps1` → **Exécuter avec PowerShell**. Ou dans un terminal ouvert dans le dossier :
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\setup_windows.ps1        # Interdiscount + Fnac
+   powershell -ExecutionPolicy Bypass -File .\setup_windows.ps1 tout   # toutes les boutiques
+   ```
+3. Si aucune notification n'est configurée, le Bloc-notes s'ouvre sur `.env` : remplis ntfy ou Telegram, enregistre, relance.
+
+Le script installe Python et Playwright dans le dossier, fait un passage de test, puis crée la tâche `zelda-watch` qui tourne sans fenêtre et redémarre à chaque ouverture de session. Le PC ne se met pas en veille tant qu'elle tourne.
+
+- Log en direct : `Get-Content .\zelda.log -Wait -Tail 30`
+- Arrêter : `powershell -ExecutionPolicy Bypass -File .\setup_windows.ps1 stop`
+
 ### Filet de sécurité : l'alerte de prix Toppreise
 
 Sur la fiche Toppreise de la manette, le bouton **« Ajouter une alerte de prix »** t'envoie un e-mail dès qu'une boutique référencée la propose sous le prix choisi (ex. 130 CHF). C'est officiel et ça ne dépend ni de GitHub ni de ton Mac.

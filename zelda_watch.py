@@ -44,7 +44,7 @@ def load_dotenv(path: Path = HERE / ".env") -> None:
     """Charge un fichier .env (KEY=VALUE) sans dépendance externe."""
     if not path.exists():
         return
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -850,12 +850,30 @@ def print_table(rows: list[tuple]) -> None:
     print(flush=True)
 
 
+def keep_awake() -> None:
+    """Windows : empêche la mise en veille automatique tant que le script tourne (KEEP_AWAKE=0 pour désactiver).
+    Sur Mac, c'est caffeinate (setup_mac.sh) qui s'en charge."""
+    if platform.system() != "Windows" or os.environ.get("KEEP_AWAKE", "1") == "0":
+        return
+    try:
+        import ctypes
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+    except Exception as e:
+        log(f"Impossible d'empêcher la veille ({short(e)})")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Alerte stock manette Pro Switch 2 Zelda (Suisse)")
     ap.add_argument("--once", action="store_true", help="un seul passage puis quitte")
     ap.add_argument("--test", action="store_true", help="passage + notification de test")
     ap.add_argument("--interval", type=float, default=INTERVAL_MIN, help="minutes entre deux passages")
+    ap.add_argument("--log", metavar="FICHIER", help="écrit la sortie dans ce fichier (tâche Windows en arrière-plan)")
     args = ap.parse_args()
+
+    if args.log:   # pythonw.exe n'a pas de console : tout part dans le fichier, en UTF-8 (emojis compris)
+        f = open(args.log, "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = f
 
     state = load_state()
     if args.test:
@@ -867,6 +885,7 @@ def main() -> None:
     active = [s["name"] for s in SITES if site_active(s)]
     log(f"Surveillance lancée — {len(active)} sites ({', '.join(active)}), "
         f"toutes les ~{args.interval:g} min. Ctrl+C pour arrêter.")
+    keep_awake()
     while True:
         try:
             rows = run_pass(state)
