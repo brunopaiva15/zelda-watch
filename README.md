@@ -120,6 +120,20 @@ Le script installe Python et Playwright dans le dossier, fait un passage de test
 - Log en direct : `Get-Content .\zelda.log -Wait -Tail 30`
 - Arrêter : `powershell -ExecutionPolicy Bypass -File .\setup_windows.ps1 stop`
 
+### Sur un serveur Debian / Ubuntu
+
+```bash
+git clone https://github.com/brunopaiva15/zelda-watch.git && cd zelda-watch
+cp .env.example .env && nano .env     # ntfy et/ou Telegram
+./setup_linux.sh test                 # teste seulement Interdiscount + Fnac depuis ce serveur
+./setup_linux.sh                      # service 24/7 pour Interdiscount + Fnac
+./setup_linux.sh tout                 # … ou pour toutes les boutiques
+```
+
+Le service systemd `zelda-watch` redémarre tout seul (plantage, reboot). Log : `journalctl -u zelda-watch -f`. Arrêter : `./setup_linux.sh stop`.
+
+Un serveur hébergé chez toi (IP de particulier) a plus de chances de passer DataDome qu'un VPS (IP de datacenter, bloquée comme GitHub).
+
 ### Filet de sécurité : l'alerte de prix Toppreise
 
 Sur la fiche Toppreise de la manette, le bouton **« Ajouter une alerte de prix »** t'envoie un e-mail dès qu'une boutique référencée la propose sous le prix choisi (ex. 130 CHF). C'est officiel et ça ne dépend ni de GitHub ni de ton Mac.
