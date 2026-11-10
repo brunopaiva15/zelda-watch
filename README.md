@@ -93,12 +93,19 @@ Limites : GitHub déclenche avec 5–20 min de retard, et les IP de datacenter s
 
 ### Répartir entre GitHub et ton Mac
 
-Interdiscount et Fnac refusent les IP de GitHub, mais passent depuis une connexion de particulier.
+Interdiscount et Fnac sont protégés par DataDome, qui refuse les IP de serveurs comme GitHub. Depuis une connexion de particulier, à un rythme normal, ils passent beaucoup mieux.
 
-1. Dans `.github/workflows/zelda-watch.yml`, décommente `SKIP_SITES: "Interdiscount,Fnac"`.
-2. Sur ton Mac, dans `.env` : `ONLY_SITES=Interdiscount,Fnac`, puis lance le script en continu (launchd ci-dessous).
+1. Sur ton Mac, dans le dossier du repo : `./setup_mac.sh`
+   - installe tout, fait un passage de test (tu vois tout de suite si Interdiscount et Fnac répondent), puis lance la surveillance en arrière-plan ;
+   - le Mac ne surveille que ces deux sites (`./setup_mac.sh tout` pour toutes les boutiques) ;
+   - il ne se met pas en veille tant qu'il est sur secteur.
+2. Sur GitHub : Settings → Secrets and variables → Actions → onglet **Variables** → New repository variable : `SKIP_SITES` = `Interdiscount,Fnac`. GitHub arrête alors de les tenter.
 
-GitHub surveille le reste, ton Mac ne s'occupe que de ces deux-là.
+Arrêter : `./setup_mac.sh stop`. Log : `tail -f zelda.log`.
+
+### Filet de sécurité : l'alerte de prix Toppreise
+
+Sur la fiche Toppreise de la manette, le bouton **« Ajouter une alerte de prix »** t'envoie un e-mail dès qu'une boutique référencée la propose sous le prix choisi (ex. 130 CHF). C'est officiel et ça ne dépend ni de GitHub ni de ton Mac.
 
 ### Démarrage auto sur Mac (launchd)
 

@@ -40,8 +40,8 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          # Sites qui refusent les IP de GitHub : à surveiller depuis ton Mac (voir README)
-          # SKIP_SITES: "Interdiscount,Fnac"
+          # Sites à ne pas surveiller depuis GitHub (variable du repo, ex. "Interdiscount,Fnac")
+          SKIP_SITES: ${{ vars.SKIP_SITES }}
 
       - name: Sauver l'état et les cookies
         if: always()
