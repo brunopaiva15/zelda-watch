@@ -21,6 +21,7 @@ Usage :
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import platform
@@ -71,6 +72,9 @@ BACKOFF_EVERY = int(os.environ.get("BACKOFF_EVERY", "4"))     # … et on ne le 
 CONFIRM = os.environ.get("CONFIRM", "1") != "0"               # 2e lecture avant toute alerte
 ENGINES = [e.strip() for e in os.environ.get("ENGINES", "chromium,firefox,webkit").split(",") if e.strip()]
 ONLY_SITES, SKIP_SITES = _names("ONLY_SITES"), _names("SKIP_SITES")
+# Sites qu'on ne peut pas surveiller automatiquement : leurs liens sont ajoutés à chaque alerte
+# pour vérifier à la main en un clic (MANUAL_SITES= vide pour désactiver)
+MANUAL_SITES = [x.strip() for x in os.environ.get("MANUAL_SITES", "Interdiscount,Fnac").split(",") if x.strip()]
 MAX_LINKS_PER_SEARCH = 4
 
 Q = urllib.parse.quote("zelda pro controller")
@@ -681,24 +685,36 @@ def _post(url: str, data: bytes, headers: dict) -> None:
     urllib.request.urlopen(req, timeout=20).read()
 
 
-def notify(title: str, message: str, url: str | None = None) -> None:
-    log(f"🔔 {title} — {message} {url or ''}")
+def notify(title: str, message: str, url: str | None = None,
+           links: list[tuple[str, str]] | None = None) -> None:
+    """links = boutons supplémentaires [(libellé, url)] : Telegram (boutons), ntfy (actions), texte ailleurs."""
+    links = links or []
+    log(f"🔔 {title} — {message} {url or ''}" + "".join(f"\n      {l} : {u}" for l, u in links))
     tok, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     if tok and chat:
         try:
-            text = f"<b>{title}</b>\n{message}" + (f"\n{url}" if url else "")
-            _post(f"https://api.telegram.org/bot{tok}/sendMessage",
-                  urllib.parse.urlencode({"chat_id": chat, "text": text, "parse_mode": "HTML"}).encode(),
+            text = f"<b>{html.escape(title)}</b>\n{html.escape(message)}" + (f"\n{html.escape(url)}" if url else "")
+            if links:
+                text += "\n\nÀ vérifier à la main :\n" + "\n".join(
+                    f'• <a href="{html.escape(u)}">{html.escape(l)}</a>' for l, u in links)
+            data = {"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": "true"}
+            buttons = ([[{"text": "🛒 Ouvrir la fiche", "url": url}]] if url else []) + \
+                      [[{"text": f"🔎 {l}", "url": u}] for l, u in links]
+            if buttons:
+                data["reply_markup"] = json.dumps({"inline_keyboard": buttons})
+            _post(f"https://api.telegram.org/bot{tok}/sendMessage", urllib.parse.urlencode(data).encode(),
                   {"Content-Type": "application/x-www-form-urlencoded"})
         except Exception as e:
             log(f"   Telegram KO : {e}")
     topic = os.environ.get("NTFY_TOPIC")
     if topic:
         try:
-            payload = {"topic": topic, "title": title, "message": message, "priority": 5,
-                       "tags": ["video_game"]}
+            msg = message + ("\n\nÀ vérifier à la main : " + ", ".join(l for l, _ in links) if links else "")
+            payload = {"topic": topic, "title": title, "message": msg, "priority": 5, "tags": ["video_game"]}
             if url:
                 payload["click"] = url
+            if links:   # ntfy accepte 3 boutons maximum
+                payload["actions"] = [{"action": "view", "label": l, "url": u, "clear": False} for l, u in links[:3]]
             _post(os.environ.get("NTFY_SERVER", "https://ntfy.sh"),
                   json.dumps(payload).encode(), {"Content-Type": "application/json"})
         except Exception as e:
@@ -708,6 +724,19 @@ def notify(title: str, message: str, url: str | None = None) -> None:
         subprocess.run(["osascript", "-e",
                         f'display notification "{esc(message)}" with title "{esc(title)}" sound name "Glass"'],
                        capture_output=True)
+
+
+def manual_links(state: dict, exclude: str) -> list[tuple[str, str]]:
+    """Fiches des sites à vérifier à la main (MANUAL_SITES), sauf celui qui vient d'alerter."""
+    out = []
+    for site in SITES:
+        name = site["name"]
+        if name not in MANUAL_SITES or name == exclude:
+            continue
+        urls = list(dict.fromkeys(site.get("urls", []) + state.get("discovered", {}).get(name, [])))
+        for i, u in enumerate(urls[:2]):
+            out.append((name if i == 0 else f"{name} (autre fiche)", u))
+    return out
 
 
 # ─────────────────────────────── Boucle ───────────────────────────────
@@ -818,7 +847,8 @@ def handle_status(state: dict, site: str, url: str, status: str, info: str) -> N
         title = {"in": "🎮 Manette Zelda EN STOCK",
                  "preorder": "🎮 Manette Zelda en PRÉCOMMANDE",
                  "maybe": "🎮 Manette Zelda peut-être dispo"}[status]
-        notify(("🔁 " if remind else "") + title, f"{site} — {info}", url)
+        notify(("🔁 " if remind else "") + title, f"{site} — {info}", url,
+               links=manual_links(state, exclude=site) if status in ("in", "preorder", "maybe") else None)
         item["notified"] = now
     elif prev.get("status") in ALERT and status not in ALERT:
         log(f"{site} : de nouveau {LABEL.get(status, status)}")
@@ -877,7 +907,8 @@ def main() -> None:
 
     state = load_state()
     if args.test:
-        notify("🧪 Test zelda_watch", "Si tu lis ceci, les notifications fonctionnent.")
+        notify("🧪 Test zelda_watch", "Si tu lis ceci, les notifications fonctionnent.",
+               links=manual_links(state, exclude=""))
     if args.test or args.once:
         print_table(run_pass(state))
         return
