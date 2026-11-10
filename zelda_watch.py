@@ -351,17 +351,31 @@ def text_signal(info: dict) -> tuple[str, str]:
     return classify_text(info.get("region", ""))
 
 
-def toppreise_status(raw: str) -> tuple[str, str]:
-    """Toppreise affiche la dispo en icônes : on se fie au prix le plus bas affiché."""
-    m = re.search(r"(?:à partir de|a partir de|ab|from)\s*CHF\s*([\d'’]+(?:[.,]\d{1,2})?)", raw, re.I)
+PRICE_RE = re.compile(r"(?:à partir de|a partir de|ab|from|dès|des)\s*CHF\s*([\d'’]+(?:[.,]\d{1,2}|[.,]-)?)", re.I)
+# Tout ce qui suit ces titres concerne d'AUTRES produits. (« Variantes de produit » et « Autres produits »
+# ne servent pas de coupure : ce sont aussi des onglets placés AVANT la liste des offres.)
+OTHER_PRODUCTS_RE = re.compile(r"produits alternatifs|d.autres internautes|alternative produkte|"
+                               r"andere nutzer interessieren|alternative products", re.I)
+NO_OFFER_RE = re.compile(r"aucune offre|\b0 offres?\b|keine angebote|\b0 angebote?\b|no offers|\b0 offers?\b")
+
+
+def toppreise_status(title: str, body: str) -> tuple[str, str]:
+    """Toppreise : on ne regarde que le produit lui-même, jamais les « produits alternatifs ».
+    Le titre de l'onglet contient « à partir de CHF X » quand il y a des offres."""
+    m = PRICE_RE.search(title)
     if not m:
-        t = norm(raw)
-        if re.search(r"aucune offre|keine angebote|no offers", t):
+        cut = OTHER_PRODUCTS_RE.search(body)
+        own = body[:cut.start()] if cut else body[:3000]
+        if NO_OFFER_RE.search(norm(own)):
             return "out", "aucune offre"
-        return "unknown", "prix introuvable"
-    price = parse_price(m.group(1))
+        m = PRICE_RE.search(own)
+        if not m:
+            return "unknown", "prix introuvable"
+    price = parse_price(m.group(1).rstrip("-"))
     if price is None:
         return "unknown", "prix illisible"
+    if price < MIN_PRICE:
+        return "unknown", f"prix CHF {price:.2f} suspect (< {MIN_PRICE:.0f}), ignoré"
     if price <= MAX_PRICE:
         return "in", f"offre dès CHF {price:.2f} (≤ {MAX_PRICE:.0f})"
     return "pricey", f"seule offre dès CHF {price:.2f} (> {MAX_PRICE:.0f})"
@@ -624,7 +638,7 @@ def check_product(ctx, url: str, aggregator: bool) -> tuple[str, str]:
         if code >= 400:
             return "error", f"HTTP {code}"
         if aggregator:
-            return toppreise_status(info["title"] + "\n" + info["h1"] + "\n" + info["body"][:5000])
+            return toppreise_status(info["title"], info["body"])
 
         ld = classify_jsonld(page.locator('script[type="application/ld+json"]').all_text_contents())
         meta = classify_meta(info)
