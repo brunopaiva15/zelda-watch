@@ -21,7 +21,7 @@ Chaque statut affiche ce qui l'a décidé, par exemple `schema.org OutOfStock ·
 | ⚠️ À VÉRIFIER | sources contradictoires (ex. schema.org dit dispo, la page dit rupture) | oui |
 | 💸 trop cher | dispo mais au-dessus de `MAX_PRICE` (130 CHF par défaut) | non |
 | ❌ rupture / ❔ inconnu / · pas listée | rien à faire | non |
-| 🚫 bloqué / 💥 erreur | le site refuse le robot (le log dit lequel : DataDome, Cloudflare, Akamai…) | après 6 échecs |
+| 🚫 bloqué / 💥 erreur | le site refuse le robot (le log dit lequel : DataDome, Cloudflare, Akamai…) | après 6 échecs, au plus 1×/72 h par site, jamais pour Interdiscount et Fnac |
 | ⏸ en pause | site bloqué plusieurs fois de suite, retenté moins souvent | non |
 
 ## Quand un site bloque (403)
@@ -30,7 +30,7 @@ Chaque statut affiche ce qui l'a décidé, par exemple `schema.org OutOfStock ·
 - Il laisse quelques secondes au site pour terminer sa vérification automatique, puis relit la page.
 - Il **garde les cookies** entre deux passages, comme un navigateur normal.
 - Si un site bloque 3 fois de suite, il ne le retente plus qu'1 passage sur 4, pour ne pas se faire bannir plus fort.
-- Après 6 échecs, tu reçois « ⚠️ Site non surveillé ».
+- Après 6 échecs, tu reçois « ⚠️ Site non surveillé », au plus une fois tous les 3 jours par site. Rien pour les sites de `MANUAL_SITES` (Interdiscount, Fnac), déjà connus comme bloqués. Le retour à la normale n'est noté que dans le log.
 
 Le script ne contourne pas les captchas. Un site qui refuse toutes les IP de datacenter (GitHub, serveurs cloud) ne passera jamais depuis là : la solution est de le surveiller depuis une connexion de particulier, voir « Répartir entre GitHub et ton Mac ».
 

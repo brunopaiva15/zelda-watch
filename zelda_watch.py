@@ -67,6 +67,9 @@ REMIND_MIN = float(os.environ.get("REMIND_MIN", "30"))        # rappel si toujou
 MAX_PRICE = float(os.environ.get("MAX_PRICE", "130"))         # ignore les offres plus chères (revendeurs)
 MIN_PRICE = float(os.environ.get("MIN_PRICE", "50"))          # offres moins chères = services/accessoires
 FAIL_ALERT_PASSES = int(os.environ.get("FAIL_ALERT_PASSES", "6"))  # alerte si un site est KO trop longtemps
+HEALTH_ALERTS = os.environ.get("HEALTH_ALERTS", "1") != "0"   # 0 = jamais de « site non surveillé »
+HEALTH_COOLDOWN_H = float(os.environ.get("HEALTH_COOLDOWN_H", "72"))  # au plus 1 alerte par site sur cette durée
+RECOVER_PASSES = int(os.environ.get("RECOVER_PASSES", "3"))   # OK N passages de suite avant « rétabli »
 BACKOFF_AFTER = int(os.environ.get("BACKOFF_AFTER", "3"))     # site bloqué N fois de suite → on ralentit
 BACKOFF_EVERY = int(os.environ.get("BACKOFF_EVERY", "4"))     # … et on ne le tente plus qu'1 passage sur N
 CONFIRM = os.environ.get("CONFIRM", "1") != "0"               # 2e lecture avant toute alerte
@@ -788,13 +791,14 @@ def run_pass(state: dict) -> list[tuple]:
                     rows.append((name, "paused", f"bloqué {fails}× de suite, retenté 1 passage sur {BACKOFF_EVERY}", ""))
                     continue
 
-                site_ok = False
+                site_ok, search_ok = False, False
                 prefer = state["engine"].get(host)
 
                 if site.get("search"):
                     (st, detail, found), used = with_fallback(engines, discover, site["search"], prefer=prefer)
+                    search_ok = bool(used)
                     if used:
-                        site_ok, prefer = True, used
+                        prefer = used
                         state["engine"][host] = used
                     else:
                         log(f"{name} : recherche {LABEL.get(st, st)} {detail}")
@@ -808,6 +812,7 @@ def run_pass(state: dict) -> list[tuple]:
                 urls = list(dict.fromkeys(site.get("urls", []) + state["discovered"].get(name, [])))
                 if not urls:
                     rows.append((name, "absent", "aucune fiche trouvée", ""))
+                    site_ok = bool(site.get("search")) and search_ok
 
                 for url in urls:
                     (status, info), used = with_fallback(engines, check_product, url, agg, prefer=prefer)
@@ -856,19 +861,32 @@ def handle_status(state: dict, site: str, url: str, status: str, info: str) -> N
 
 
 def handle_health(state: dict, site: str, ok: bool) -> None:
+    """Alerte « site non surveillé » sans spam :
+    - jamais pour les sites déjà connus comme bloqués (MANUAL_SITES) ;
+    - au plus une fois tous les HEALTH_COOLDOWN_H heures par site ;
+    - le retour à la normale est seulement noté dans le log, après RECOVER_PASSES passages OK de suite."""
+    oks = state.setdefault("oks", {})
+    last = state.setdefault("health_alerted_at", {})
     if ok:
         state["fails"][site] = 0
-        if site in state["fail_alerted"]:
+        oks[site] = oks.get(site, 0) + 1
+        if site in state["fail_alerted"] and oks[site] >= RECOVER_PASSES:
             state["fail_alerted"].remove(site)
-            notify("✅ Surveillance rétablie", f"{site} répond à nouveau.")
+            log(f"{site} : surveillance rétablie")
         return
+    oks[site] = 0
     n = state["fails"].get(site, 0) + 1
     state["fails"][site] = n
-    if n >= FAIL_ALERT_PASSES and site not in state["fail_alerted"]:
-        state["fail_alerted"].append(site)
-        notify("⚠️ Site non surveillé",
-               f"{site} bloque le robot depuis {n} tentatives. Lance le script depuis ton Mac "
-               f"(ONLY_SITES={site}) ou vérifie à la main.")
+    if n < FAIL_ALERT_PASSES or site in state["fail_alerted"]:
+        return
+    state["fail_alerted"].append(site)
+    if not HEALTH_ALERTS or site in MANUAL_SITES or time.time() - last.get(site, 0) < HEALTH_COOLDOWN_H * 3600:
+        log(f"{site} : bloqué depuis {n} tentatives (pas de notification)")
+        return
+    last[site] = time.time()
+    notify("⚠️ Site non surveillé",
+           f"{site} bloque le robot depuis {n} tentatives. Vérifie-le à la main en attendant "
+           f"(prochain avertissement pour ce site dans {HEALTH_COOLDOWN_H:.0f} h au plus tôt).")
 
 
 def print_table(rows: list[tuple]) -> None:
